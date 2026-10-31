@@ -56,6 +56,14 @@
     </receiver>
 
     <receiver
+        android:name="app.notifee.core.PackageReplacedBroadcastReceiver"
+        android:exported="false">
+        <intent-filter>
+            <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+        </intent-filter>
+    </receiver>
+
+    <receiver
       android:name="app.notifee.core.AlarmPermissionBroadcastReceiver"
       android:exported="true">
       <intent-filter>
@@ -68,7 +76,8 @@
       AlarmManager (NotifeeAlarmManager.scheduleTimestampTriggerNotification). It does not
       handle any system-broadcast Intent action — onReceive dispatches intent.getExtras()
       to NotifeeAlarmManager.displayScheduledNotification, which early-returns on null
-      extras. Reboot recovery is owned by RebootBroadcastReceiver above.
+      extras. Reboot recovery is owned by RebootBroadcastReceiver above; package-replacement
+      (app update) recovery is owned by PackageReplacedBroadcastReceiver.
     -->
     <receiver
       android:name="app.notifee.core.NotificationAlarmReceiver"

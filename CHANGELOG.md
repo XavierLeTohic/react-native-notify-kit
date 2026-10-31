@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Android / triggers**: re-arm persisted trigger notifications immediately after the application package is replaced (app update) via a new `MY_PACKAGE_REPLACED` receiver (`PackageReplacedBroadcastReceiver`). After a package update, Android places the app in the stopped state until the user launches it, and the stopped-state filter suppresses delivery of the `AlarmManager` broadcast PendingIntents backing persisted triggers — any trigger whose fire time fell between the update and the next manual app launch was silently dropped. This matters for reminder-style schedules (e.g. medication intake reminders): the receiver mirrors `RebootBroadcastReceiver` and runs the same race-guarded `NotifeeAlarmManager.rescheduleNotifications` recovery at update time, so reminders keep firing without requiring the user to open the app after updating. `MY_PACKAGE_REPLACED` is only delivered for updates, never on a fresh install.
+
 ## [10.10.0] - 2026-10-28
 
 ### Added
