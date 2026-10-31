@@ -229,6 +229,12 @@ class NotifeeAlarmManager {
       Context context = getApplicationContext();
       Intent notificationIntent = new Intent(context, NotificationAlarmReceiver.class);
       notificationIntent.putExtra(NOTIFICATION_ID_INTENT_KEY, notificationId);
+      // FLAG_INCLUDE_STOPPED_PACKAGES: after an app update Android places the app
+      // in the stopped state until the user launches it, and broadcast delivery to
+      // stopped packages is filtered by default. Without this flag a re-armed
+      // trigger whose fire time falls in that window is silently dropped (see
+      // PackageReplacedBroadcastReceiver). Reminders must fire regardless.
+      notificationIntent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
       return PendingIntent.getBroadcast(
           context,
           notificationId.hashCode(),
