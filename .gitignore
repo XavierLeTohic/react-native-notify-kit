@@ -587,3 +587,4 @@ ios/NotifeeCore.xcworkspace
 
 # Claude Code local runtime state (PID lock, scheduled tasks, local settings)
 .claude/
+pr-body.md
