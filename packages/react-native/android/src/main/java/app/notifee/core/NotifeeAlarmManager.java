@@ -24,6 +24,8 @@ import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import androidx.annotation.NonNull;
@@ -64,13 +66,57 @@ class NotifeeAlarmManager {
       MoreExecutors.listeningDecorator(alarmManagerExecutor);
 
   /**
-   * Grace period for stale non-repeating triggers discovered during reboot recovery. Within this
-   * window the trigger is fired once and the Room row is deleted; beyond it the row is deleted
-   * silently to avoid showing stale content. Fix for upstream invertase/notifee#734: on OEM devices
-   * (MIUI, ColorOS, EMUI, FuntouchOS) that suppress BOOT_COMPLETED, zombie rows would otherwise
-   * re-fire on every reboot and never be cleaned.
+   * Manifest meta-data key letting host apps override the stale-trigger grace period. Set {@code
+   * <meta-data android:name="app.notifee.stale_grace_period_ms" android:value="0" />} in the app
+   * manifest to disable the late-fire entirely (skip-and-delete on recovery): the app layer then
+   * owns the missed-reminder UX instead of a system notification appearing out of context hours
+   * after the fact.
    */
-  private static final long STALE_TRIGGER_GRACE_PERIOD_MS = TimeUnit.HOURS.toMillis(24);
+  static final String STALE_TRIGGER_GRACE_PERIOD_META_DATA_KEY = "app.notifee.stale_grace_period_ms";
+
+  /**
+   * Default grace period for stale non-repeating triggers discovered during reboot recovery.
+   * Within this window the trigger is fired once and the Room row is deleted; beyond it the row is
+   * deleted silently to avoid showing stale content. Fix for upstream invertase/notifee#734: on
+   * OEM devices (MIUI, ColorOS, EMUI, FuntouchOS) that suppress BOOT_COMPLETED, zombie rows would
+   * otherwise re-fire on every reboot and never be cleaned. Host apps can override it per-app via
+   * {@link #STALE_TRIGGER_GRACE_PERIOD_META_DATA_KEY} (0 disables the late-fire).
+   */
+  private static final long DEFAULT_STALE_TRIGGER_GRACE_PERIOD_MS = TimeUnit.HOURS.toMillis(24);
+
+  /**
+   * Resolved grace period, cached for the process lifetime. The value comes from static manifest
+   * meta-data, so it cannot change while the process is alive.
+   */
+  private static volatile long staleTriggerGracePeriodMs = -1;
+
+  /** Resolves (and caches) the stale-trigger grace period from manifest meta-data. */
+  static long resolveStaleTriggerGracePeriodMs() {
+    long cached = staleTriggerGracePeriodMs;
+    if (cached >= 0) {
+      return cached;
+    }
+    long graceMs = DEFAULT_STALE_TRIGGER_GRACE_PERIOD_MS;
+    try {
+      Context context = getApplicationContext();
+      ApplicationInfo appInfo =
+          context
+              .getPackageManager()
+              .getApplicationInfo(context.getPackageName(), PackageManager.GET_META_DATA);
+      if (appInfo != null && appInfo.metaData != null) {
+        graceMs =
+            appInfo.metaData.getLong(
+                STALE_TRIGGER_GRACE_PERIOD_META_DATA_KEY, DEFAULT_STALE_TRIGGER_GRACE_PERIOD_MS);
+      }
+    } catch (Exception e) {
+      Logger.w(
+          TAG,
+          "Could not read stale grace period meta-data, falling back to the 24h default",
+          e);
+    }
+    staleTriggerGracePeriodMs = graceMs;
+    return graceMs;
+  }
 
   /**
    * Process-wide guard against concurrent reschedule passes. Set via {@code compareAndSet} at the
@@ -489,16 +535,33 @@ class NotifeeAlarmManager {
   /**
    * Testable overload of {@link #handleStaleNonRepeatingTrigger(NotificationModel,
    * TimestampTriggerModel)} that accepts the {@link Executor} used for the resilient display →
-   * delete chain. Production callers use the no-executor overload which delegates with the
-   * cached-thread-pool listening executor. Unit tests pass {@code
-   * com.google.common.util.concurrent.MoreExecutors.directExecutor()} so that Mockito's
-   * thread-local {@code mockStatic} intercepts fire on the calling thread instead of a worker
-   * thread where the stubs are inactive.
+   * delete chain, with the grace period resolved from manifest meta-data. Production callers use
+   * the no-executor overload which delegates with the cached-thread-pool listening executor. Unit
+   * tests pass {@code com.google.common.util.concurrent.MoreExecutors.directExecutor()} so that
+   * Mockito's thread-local {@code mockStatic} intercepts fire on the calling thread instead of a
+   * worker thread where the stubs are inactive.
    */
   @VisibleForTesting
   @Nullable
   static ListenableFuture<Void> handleStaleNonRepeatingTrigger(
       NotificationModel notificationModel, TimestampTriggerModel trigger, Executor executor) {
+    return handleStaleNonRepeatingTrigger(
+        notificationModel, trigger, executor, resolveStaleTriggerGracePeriodMs());
+  }
+
+  /**
+   * Testable overload taking the grace period explicitly, so unit tests can exercise both the
+   * default behavior (fire once within grace) and the skip-and-delete behavior (grace {@code <=
+   * 0}), the latter being the mode host apps opt into via the {@code app.notifee.stale_grace_period_ms}
+   * manifest meta-data when their app layer owns the missed-reminder UX.
+   */
+  @VisibleForTesting
+  @Nullable
+  static ListenableFuture<Void> handleStaleNonRepeatingTrigger(
+      NotificationModel notificationModel,
+      TimestampTriggerModel trigger,
+      Executor executor,
+      long gracePeriodMs) {
     if (trigger.getRepeatFrequency() != null) {
       return null;
     }
@@ -512,13 +575,13 @@ class NotifeeAlarmManager {
     WorkDataRepository workRepo = WorkDataRepository.getInstance(getApplicationContext());
     long stalenessMs = nowMs - triggerTs;
 
-    if (stalenessMs > STALE_TRIGGER_GRACE_PERIOD_MS) {
+    if (stalenessMs > gracePeriodMs) {
       Logger.i(
           TAG,
           "Deleting stale non-repeating trigger (age "
               + stalenessMs
               + "ms > "
-              + STALE_TRIGGER_GRACE_PERIOD_MS
+              + gracePeriodMs
               + "ms grace period): "
               + id);
       return workRepo.deleteById(id);

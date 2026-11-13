@@ -209,6 +209,69 @@ public class NotifeeAlarmManagerHandleStaleTest {
     verify(mockRepo, times(1)).deleteById("test-sync-throw");
   }
 
+  // ─── Configurable grace period (app.notifee.stale_grace_period_ms) ─────────
+  //     Host apps can override the 24h default via manifest meta-data. Grace 0
+  //     disables the late-fire entirely: recovery becomes skip-and-delete, and
+  //     the app layer owns the missed-reminder UX (e.g. an in-app card) instead
+  //     of a system notification firing out of context hours after the fact.
+
+  @Test
+  public void handleStaleNonRepeatingTrigger_zeroGrace_rowIsDeleted_withoutLateFire()
+      throws Exception {
+    NotificationModel model = buildStaleModel("test-zero-grace");
+    TimestampTriggerModel trigger = buildStaleWithinGraceTrigger(); // 1h stale
+
+    ListenableFuture<Void> result =
+        NotifeeAlarmManager.handleStaleNonRepeatingTrigger(model, trigger, DIRECT_EXECUTOR, 0L);
+
+    assertNotNull("helper must return a non-null future for a stale trigger", result);
+    result.get(5, TimeUnit.SECONDS);
+
+    // Skip-and-delete: the row is cleaned, but no notification is ever posted.
+    verify(mockRepo, times(1)).deleteById("test-zero-grace");
+    notificationManagerMock.verifyNoInteractions();
+  }
+
+  @Test
+  public void handleStaleNonRepeatingTrigger_customGraceBelowStaleness_rowDeletedWithoutLateFire()
+      throws Exception {
+    NotificationModel model = buildStaleModel("test-small-grace");
+    TimestampTriggerModel trigger = buildStaleWithinGraceTrigger(); // 1h stale
+
+    // Grace of 30 minutes < 1h staleness → beyond grace → skip-and-delete.
+    ListenableFuture<Void> result =
+        NotifeeAlarmManager.handleStaleNonRepeatingTrigger(
+            model, trigger, DIRECT_EXECUTOR, 30L * 60 * 1000);
+
+    assertNotNull(result);
+    result.get(5, TimeUnit.SECONDS);
+    verify(mockRepo, times(1)).deleteById("test-small-grace");
+    notificationManagerMock.verify(
+        () -> NotificationManager.displayNotification(any(), any()), never());
+  }
+
+  @Test
+  public void handleStaleNonRepeatingTrigger_customGraceAboveStaleness_lateFireThenDelete()
+      throws Exception {
+    notificationManagerMock
+        .when(() -> NotificationManager.displayNotification(any(), any()))
+        .thenReturn(Futures.immediateFuture(null));
+
+    NotificationModel model = buildStaleModel("test-large-grace");
+    TimestampTriggerModel trigger = buildStaleWithinGraceTrigger(); // 1h stale
+
+    // Grace of 2 hours > 1h staleness → within grace → fire once, then delete.
+    ListenableFuture<Void> result =
+        NotifeeAlarmManager.handleStaleNonRepeatingTrigger(
+            model, trigger, DIRECT_EXECUTOR, 2L * 60 * 60 * 1000);
+
+    assertNotNull(result);
+    result.get(5, TimeUnit.SECONDS);
+    notificationManagerMock.verify(
+        () -> NotificationManager.displayNotification(any(), any()), times(1));
+    verify(mockRepo, times(1)).deleteById("test-large-grace");
+  }
+
   // ─── Builders ──────────────────────────────────────────────────────────────
 
   private static NotificationModel buildStaleModel(String id) {
