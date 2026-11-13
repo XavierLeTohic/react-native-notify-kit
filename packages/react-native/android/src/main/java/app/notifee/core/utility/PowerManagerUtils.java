@@ -272,8 +272,20 @@ public class PowerManagerUtils {
                     .setData(Uri.parse("mobilemanager://function/entry/AutoStart")));
         break;
       case "honor":
+        // Modern MagicOS devices ship the system manager under the
+        // com.hihonor.* namespace; the legacy com.huawei.systemmanager
+        // activities only exist on older EMUI-based Honor builds.
         possibleIntents =
             Arrays.asList(
+                createIntent(
+                    "com.hihonor.systemmanager",
+                    "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
+                createIntent(
+                    "com.hihonor.systemmanager",
+                    "com.hihonor.systemmanager.appcontrol.activity.StartupAppControlActivity"),
+                createIntent(
+                    "com.hihonor.systemmanager",
+                    "com.hihonor.systemmanager.power.ui.HwPowerManagerActivity"),
                 createIntent(
                     "com.huawei.systemmanager",
                     "com.huawei.systemmanager.optimize.process.ProtectActivity"));
